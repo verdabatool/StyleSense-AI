@@ -6,3 +6,5 @@ clip-openai
 faiss-cpu
 pillow
 tqdm
+dask
+matplotlib
