@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+torch
+clip-openai
+faiss-cpu
+pillow
+tqdm

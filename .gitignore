@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Embeddings (DO NOT PUSH)
+Embeddings/
+Data/
+
+# OS junk
+.DS_Store
