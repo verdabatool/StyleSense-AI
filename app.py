@@ -1,350 +1,214 @@
-import streamlit as st
 import os
-import time
 import pickle
-import numpy as np
+import streamlit as st
 import pandas as pd
-import torch
-import clip
-import faiss
 from PIL import Image
 
-# Set environment variable
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+from multimodal_retrieval import (
+    MultiModalRetriever,
+    default_paths,
+    image_path_from_article_id,
+)
 
-# --- 1. Configuration (Paths) ---
-ROOT = os.getcwd()
-DATA_DIR = os.path.join(ROOT, "Data")
-IMAGE_DIR = os.path.join(DATA_DIR, "images")
-ARTICLES_CSV = os.path.join(DATA_DIR, "articles.csv")
+# --------------------------------------------------
+# Page config
+# --------------------------------------------------
+st.set_page_config(
+    page_title="E-Commerce Multimodal Search",
+    layout="wide",
+)
 
-# --- Embeddings Paths ---
-EMBEDDINGS_DIR = os.path.join(ROOT, "Embeddings")
-emb_path = os.path.join(EMBEDDINGS_DIR, "image_embeddings.npy")
-ids_path = os.path.join(EMBEDDINGS_DIR, "image_ids.pkl")
+st.title("🛒 Multimodal Product Search")
+st.caption("Text • Image • Product similarity powered by CLIP + FAISS")
 
-# --- 2. Page Asset URLs ---
-# We just need the category names now
-CATEGORIES = ["Dresses", "T-shirts", "Jackets", "Pants", "Shoes", "Accessories"]
-
-
-# --- 3. Helper Functions (Unchanged) ---
-
-def image_path(article_id):
-    """Helper function to get the full path of an article image."""
-    pfx = str(article_id)[:3]
-    return os.path.join(IMAGE_DIR, pfx, f"{article_id}.jpg")
-
-
-def find_items_by_text(query, faiss_index, ids, clip_model, clip_tokenizer, device, top_k=5):
-    """Find similar items based on a text query."""
-    text_input = clip_tokenizer([query]).to(device)
-
-    with torch.no_grad():
-        text_embedding = clip_model.encode_text(text_input)
-        text_embedding /= text_embedding.norm(dim=-1, keepdim=True)
-
-    query_embedding = text_embedding.cpu().numpy().astype('float32')
-
-    distances, indices = faiss_index.search(query_embedding, top_k)
-    matched_ids = [ids[i] for i in indices[0]]
-
-    return matched_ids
+# --------------------------------------------------
+# Load retriever & data (cached)
+# --------------------------------------------------
+@st.cache_resource(show_spinner=True)
+def load_retriever():
+    paths = default_paths()
+    retriever = MultiModalRetriever(paths)
+    retriever.setup(build_embeddings_if_missing=True)
+    return retriever
 
 
-def show_article_details(article_ids_list, articles_df):
-    """
-    Takes a list of article_ids and the main articles DataFrame.
-    Returns a formatted DataFrame with key details, preserving the order.
-    """
-    if not article_ids_list:
-        return pd.DataFrame()
+@st.cache_resource(show_spinner=False)
+def load_copurchase_maps():
+    base = os.path.join(os.getcwd(), "Embeddings")
+    article_path = os.path.join(base, "co_purchase_article.pkl")
+    type_path = os.path.join(base, "co_purchase_type.pkl")
 
-    result_df = articles_df[articles_df["article_id"].isin(article_ids_list)]
+    article_map, type_map = {}, {}
 
-    id_map = {id: pos for pos, id in enumerate(article_ids_list)}
-    result_df = result_df.sort_values(by="article_id", key=lambda x: x.map(id_map))
+    if os.path.exists(article_path):
+        with open(article_path, "rb") as f:
+            article_map = pickle.load(f)
 
-    return result_df
+    if os.path.exists(type_path):
+        with open(type_path, "rb") as f:
+            type_map = pickle.load(f)
 
-
-# --- 4. Cached Asset Loading (Unchanged) ---
-
-@st.cache_resource
-def load_search_assets():
-    """
-    Loads all necessary assets for the search app.
-    This function is cached by Streamlit, so it only runs once.
-    """
-    articles = pd.read_csv(ARTICLES_CSV)
-    articles["article_id"] = articles["article_id"].astype(str).str.zfill(10)
-
-    if not os.path.exists(emb_path) or not os.path.exists(ids_path):
-        st.error(
-            f"Embedding files not found! Please run your original script once to generate {emb_path} and {ids_path}.")
-        st.stop()
-
-    embeddings = np.load(emb_path)
-    with open(ids_path, "rb") as f:
-        image_ids = pickle.load(f)
-
-    embeddings_faiss = np.ascontiguousarray(embeddings, dtype='float32')
-    index = faiss.IndexFlatIP(embeddings_faiss.shape[1])
-    index.add(embeddings_faiss)
-
-    device_text = "cpu"
-    model_text, _ = clip.load("ViT-B/32", device=device_text)
-    model_text.eval()
-
-    return articles, index, image_ids, model_text, clip.tokenize
+    return article_map, type_map
 
 
-# --- 5. UI Display Function (Unchanged) ---
+retriever = load_retriever()
+article_co, type_co = load_copurchase_maps()
+articles_df = retriever.articles_df
 
-def display_results_grid(df, num_columns=4):
-    """Helper function to display items in a styled grid."""
+# --------------------------------------------------
+# Sidebar
+# --------------------------------------------------
+mode = st.sidebar.radio(
+    "Search mode",
+    ["Text search", "Product similarity", "Image upload"],
+)
 
-    cols = st.columns(num_columns)
+top_k = st.sidebar.slider("Number of results", 3, 20, 6)
 
-    for i, (idx, row) in enumerate(df.iterrows()):
-        col = cols[i % num_columns]
-
-        with col.container(border=True):
-            article_id = row["article_id"]
-            img_path = image_path(article_id)
-
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+def render_results(ids, scores):
+    cols = st.columns(3)
+    for i, (aid, score) in enumerate(zip(ids, scores)):
+        with cols[i % 3]:
+            img_path = image_path_from_article_id(
+                retriever.paths.image_dir, aid
+            )
             if os.path.exists(img_path):
-                st.image(img_path, width=200)
-            else:
-                st.warning(f"Image not found:\n{article_id}")
+                st.image(img_path, use_container_width=True)
 
-            st.markdown(f"<p style='text-align: center; font-weight: bold;'>{row['prod_name']}</p>",
-                        unsafe_allow_html=True)
-            st.markdown(f"<p style='text-align: center;'><b>Article ID:</b> {article_id}</p>", unsafe_allow_html=True)
-            st.markdown(f"<p style='text-align: center;'><b>Type:</b> {row['product_type_name']}</p>",
-                        unsafe_allow_html=True)
-            st.markdown(f"<p style='text-align: center;'><b>Color:</b> {row['colour_group_name']}</p>",
-                        unsafe_allow_html=True)
+            row = articles_df[articles_df["article_id"] == aid]
+            if not row.empty:
+                r = row.iloc[0]
+                st.markdown(f"**{r.get('prod_name','')}**")
+                st.caption(
+                    f"{r.get('product_type_name','')} • score={score:.3f}"
+                )
 
 
-# --- 6. Streamlit App UI ---
+def render_copurchase_grid(anchor_id, max_items=6):
+    st.subheader("🧠 Frequently bought together")
 
-st.set_page_config(layout="wide")
+    related_ids = []
 
-# --- NEW: Custom CSS for Fashion Retail Look (MODIFIED) ---
-st.markdown("""
-    <style>
-    /* 1. Import Google Font (Added weight 900) */
-    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap');
+    if anchor_id in article_co:
+        related_ids = article_co[anchor_id][:max_items]
 
-    /* 2. Apply Font and Base Colors */
-    body, html {
-        font-family: 'Montserrat', sans-serif;
-        background-color: #FFFFFF; /* Clean white background */
-        color: #333333; /* Dark grey text */
-    }
+    if not related_ids:
+        row = articles_df[articles_df["article_id"] == anchor_id]
+        if not row.empty:
+            ptype = row.iloc[0].get("product_type_name")
+            if ptype in type_co:
+                related_ids = (
+                    articles_df[
+                        articles_df["product_type_name"].isin(type_co[ptype][:3])
+                    ]
+                    .sample(
+                        min(max_items, len(articles_df)),
+                        replace=False,
+                        random_state=42,
+                    )["article_id"]
+                    .tolist()
+                )
 
-    /* 3. Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    if not related_ids:
+        st.info("No co-purchase data available for this item.")
+        return
 
-    /* 4. Style Titles (Will be targeted by markdown h1/h3) */
-    h1 { font-weight: 700; color: #111111; }
-    h3 { font-weight: 400; color: #555555; }
+    cols = st.columns(3)
+    for i, aid in enumerate(related_ids):
+        with cols[i % 3]:
+            img_path = image_path_from_article_id(
+                retriever.paths.image_dir, aid
+            )
+            if os.path.exists(img_path):
+                st.image(img_path, use_container_width=True)
 
-    /* 5. Style Product Cards (Unchanged) */
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 8px;       
-        padding: 16px;            
-        background-color: #FAFAFA; 
-        box-shadow: 0 4px 12px 0 rgba(0,0,0,0.05); 
-        transition: 0.3s;
-        border: 1px solid #EEEEEE; 
-    }
-    [data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0 8px 16px 0 rgba(0,0,0,0.1);
-    }
-
-    /* 6. Style Search Button (Unchanged) */
-    [data-testid="stFormSubmitButton"] button {
-        background-color: #222222;
-        color: #FFFFFF;
-        border: none;
-        border-radius: 5px;
-        padding: 10px 20px;
-        transition: 0.3s;
-        width: 100%; 
-    }
-    [data-testid="stFormSubmitButton"] button:hover {
-        background-color: #555555;
-        color: #FFFFFF;
-    }
-
-    /* 7. Style Subheaders (Unchanged) */
-    [data-testid="stSubheader"] {
-        font-weight: 700;
-        color: #111111;
-        padding-top: 20px;
-    }
-
-    /* 8. --- REMOVED .circular-image class --- */
-
-    /* 9. --- MODIFIED: Style for Category Buttons (to BE the circles) --- */
-    .stButton > button {
-        /* Shape and Size */
-        width: 150px;
-        height: 150px;
-        border-radius: 50%;
-
-        /* Color and Border */
-        background-color: #F5F5F5;
-        border: 2px solid #EEEEEE;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-
-        /* Text Styling */
-        color: #333333;
-        font-family: 'Montserrat', sans-serif;
-        font-weight: 900 !important; /* <-- MODIFIED: Added !important to force bold */
-        font-size: 18px;
-
-        /* Centering Text */
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-
-        /* Other */
-        transition: 0.3s;
-        padding: 0;
-        margin: auto;
-        line-height: 1.2;
-    }
-    .stButton > button:hover {
-        background-color: #EEEEEE;
-        color: #E1005C;
-        border-color: #DDD;
-        box-shadow: 0 8px 16px 0 rgba(0,0,0,0.1);
-        transform: scale(1.05);
-    }
-    .stButton > button:focus {
-        background-color: #F5F5F5;
-        color: #333333;
-        border-color: #EEEEEE;
-    }
-
-    /* 10. --- MODIFIED: Style for Clear Search Button (to override circle) --- */
-    .clear-button button {
-        /* --- Override circle properties --- */
-        width: auto;
-        height: auto;
-        border-radius: 5px; /* Back to a rectangle */
-        padding: 8px 15px;  /* Normal button padding */
-
-        /* --- Normal button styling --- */
-        background-color: #FAFAFA;
-        color: #555;
-        border: 1px solid #DDD;
-        font-family: 'Montserrat', sans-serif;
-        font-weight: 600;
-        font-size: 14px;
-    }
-    /* --- Override hover effects for clear button --- */
-    .clear-button button:hover {
-        transform: none;
-        box-shadow: none;
-        background-color: #EEEEEE;
-        color: #111;
-        border-color: #CCC;
-    }
-
-    /* Ensure category button container is centered */
-    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"] > div {
-        display: flex;
-        justify-content: center;
-    }
-
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 7. Initialize Session State ---
-if 'last_search' not in st.session_state:
-    st.session_state.last_search = None
-
-# --- 8. App Header and Search Bar ---
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.markdown("<h1 style='text-align: center;'>🛍️ StyleSense AI</h1>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align: center;'>Where Style meets Elegance and Innovation</h3>",
-                unsafe_allow_html=True)
-    st.markdown("---")
-
-    with st.form(key="search_form"):
-        query = st.text_input(
-            "**What are you looking for?**",
-            placeholder="search here"
-        )
-        submit_button = st.form_submit_button(label="Search")
-
-        if submit_button and query:
-            st.session_state.last_search = query
-        elif submit_button and not query:
-            st.warning("Please enter a search query.")
-
-# --- 9. Load Assets (Silently) ---
-try:
-    articles, index, image_ids, model_text, tokenizer = load_search_assets()
-except Exception as e:
-    st.error(f"An error occurred while loading assets: {e}")
-    st.stop()
-
-# --- Removed Static Banner as requested ---
+            row = articles_df[articles_df["article_id"] == aid]
+            if not row.empty:
+                r = row.iloc[0]
+                st.markdown(f"**{r.get('prod_name','')}**")
+                st.caption(r.get("product_type_name",""))
 
 
-# --- 10. NEW: Category Bubbles (MODIFIED) ---
-st.subheader("Shop by Category")
-cat_cols = st.columns(len(CATEGORIES))
-
-for i, category in enumerate(CATEGORIES):
-    with cat_cols[i]:
-        # --- MODIFIED: Removed image markdown, the button is now the circle ---
-        if st.button(category, key=f"cat_{category}"):
-            st.session_state.last_search = category
-            st.rerun()
-
-# --- 11. Main Display Logic (Modified) ---
-st.markdown("---")
-
-if st.session_state.last_search:
-    st.subheader(f"Showing results for: '{st.session_state.last_search}'")
-
-    col1_clear, col2_clear, col3_clear = st.columns([1, 2, 1])
-    with col1_clear:
-        st.markdown('<div class="clear-button">', unsafe_allow_html=True)
-        if st.button("Clear Search / Show Featured"):
-            st.session_state.last_search = None
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    start_time = time.time()
-    text_search_ids = find_items_by_text(
-        st.session_state.last_search,
-        faiss_index=index,
-        ids=image_ids,
-        clip_model=model_text,
-        clip_tokenizer=tokenizer,
-        device="cpu",
-        top_k=12
+# --------------------------------------------------
+# Main UI
+# --------------------------------------------------
+if mode == "Text search":
+    query = st.text_input(
+        "Describe what you want",
+        placeholder="black leather jacket",
     )
-    print(f"Query completed in {time.time() - start_time:.4f} s")
 
-    results_df = show_article_details(text_search_ids, articles)
+    if query:
+        with st.spinner("Searching…"):
+            out = retriever.search_by_text(query, top_k=top_k)
 
-    if results_df.empty:
-        st.warning("No results found for your query.")
-    else:
-        display_results_grid(results_df)
+        if not out["ids"]:
+            st.warning("No results found.")
+        else:
+            st.subheader("Search results")
+            render_results(out["ids"], out["scores"])
 
-else:
-    st.subheader("Featured Items")
-    featured_df = articles.tail(12)
-    display_results_grid(featured_df)
+            render_copurchase_grid(out["ids"][0])
+
+
+elif mode == "Product similarity":
+    aid = st.text_input(
+        "Article ID",
+        placeholder="0108775015",
+    )
+
+    if aid:
+        try:
+            with st.spinner("Finding similar products…"):
+                out = retriever.search_by_article_id(aid, top_k=top_k)
+
+            st.subheader("Selected product")
+            img = image_path_from_article_id(
+                retriever.paths.image_dir, aid
+            )
+            if os.path.exists(img):
+                st.image(img, width=260)
+
+            st.subheader("Visually similar products")
+            render_results(out["ids"], out["scores"])
+
+            render_copurchase_grid(aid)
+
+        except Exception as e:
+            st.error(str(e))
+
+
+elif mode == "Image upload":
+    uploaded = st.file_uploader(
+        "Upload an image",
+        type=["jpg", "png", "jpeg"],
+    )
+
+    if uploaded:
+        img = Image.open(uploaded).convert("RGB")
+        st.image(img, width=300)
+
+        with st.spinner("Matching against catalog…"):
+            out = retriever.search_by_image_path(
+                image_path=uploaded,
+                top_k=top_k,
+            )
+
+        if not out["ids"]:
+            st.warning("No matches found.")
+        else:
+            st.subheader("Closest matches")
+            render_results(out["ids"], out["scores"])
+
+            render_copurchase_grid(out["ids"][0])
+
+# --------------------------------------------------
+# Footer
+# --------------------------------------------------
+st.divider()
+st.caption(
+    "CLIP embeddings • FAISS cosine similarity • Offline co-purchase graph"
+)
