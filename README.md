@@ -67,7 +67,7 @@ This is a crucial one-time step that will index all your images. This script wil
 
 From your terminal, run the `multimodel_retrieval.py` script:
 ```bash
-python ultimodel_retrieval.py.py
+python multimodel_retrieval.py.py
 ```
 This will:
 
