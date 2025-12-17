@@ -9,11 +9,6 @@ StyleSense AI is a comprehensive fashion recommendation system. The project is d
 
 This app is built using Streamlit, Python, CLIP for multimodal embeddings, and FAISS for high-speed vector search.
 
-**Current Status:** The first objective (Visual Search) is fully implemented and deployable. The "Frequently Bought Together" feature is the next planned step.
-
-*Here's a great place to add a GIF or screenshot of your app in action!*
-`![StyleSense AI Demo](app_demo.png)`
-
 ---
 
 ## 🚀 How to Run Locally
@@ -46,7 +41,7 @@ pip install -r requirements.txt
 ### Step 3: Download the Data  
 This project requires the H&M dataset from Kaggle.
 
-Download the data from this link: <https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations/data>.
+Download the data from this link:[H&M Personalized Fashion Recommendations](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations/data).
 
 Unzip the folder and place articles.csv and the images folder inside a new folder named Data in the root of the project.
 
@@ -59,8 +54,10 @@ StyleSense-AI/
 |       |-- 011/
 |       |-- 012/
 |       |-- ...
+|-- Embeddings/
 |-- streamlit_app.py
-|-- recommendation_model.py
+|-- multimodel_retrieval.py
+|-- copurchase_map.py
 |-- requirements.txt
 |-- .gitignore
 |-- README.md
@@ -68,9 +65,9 @@ StyleSense-AI/
 ### Step 4: Generate the Image Embeddings
 This is a crucial one-time step that will index all your images. This script will create the Embeddings folder and the necessary model files.
 
-From your terminal, run the recommendation_model.py script:
+From your terminal, run the `multimodel_retrieval.py` script:
 ```bash
-python recommendation_model.py
+python ultimodel_retrieval.py.py
 ```
 This will:
 
@@ -80,28 +77,27 @@ This will:
 
 - Generate embeddings for all images.
 
-- Create a new `Embeddings/` folder and save image_embeddings.npy and image_ids.pkl inside it.
+- Create a new `Embeddings/` folder and save `image_embeddings.npy` and `image_ids.pkl` inside it.
 
 Note: This may take 20-30 minutes, depending on your computer's hardware.
 
-### Step 5: Run the Streamlit App
+### Step 5: Build the "Frequently Bought Together" Index
+
+Run the transaction analysis script first. This processes transactions_train.csv and saves the co-occurrence maps to the Embeddings/ folder.
+
+```python
+python copurchase_map.py
+```
+Output: Generates `co_purchase_article.pkl` and `co_purchase_type.pkl`.
+
+### Step 6: Run the Streamlit App
 Once the Embeddings folder exists, you are ready to start the web app.
 ```
 streamlit run app.py
 ```
 Streamlit will open a new tab in your browser. You can now start searching!
 
-### 🛠️ Project Structure
-
-`app.py`: The main Streamlit web application. This is the front-end and query logic.
-
-`recommendation_model.py`: (Reference & Setup Script) This script contains the logic for generating the image embeddings using CLIP and FAISS. It is run once during setup (Step 4) to create the Embeddings folder.
-
-`requirements.txt`: A list of all Python dependencies required to run the project.
-
-`Data/`: (User-created) Contains the articles.csv and the images/ directory from Kaggle.
-
-`Embeddings/`: (Auto-generated) Stores the computed image_embeddings.npy and image_ids.pkl files used by the app.
+[Here is the demo video where the entire project is demonstrated](https://drive.google.com/file/d/11_iPtsTdkYNe8wFCLVNLEDPyXFUgGnEx/view?usp=sharing).
 
 
 
