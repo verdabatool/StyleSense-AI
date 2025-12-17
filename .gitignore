@@ -9,3 +9,5 @@ Data/
 
 # OS junk
 .DS_Store
+.ipynb_checkpoints/
+visualization/

@@ -59,7 +59,7 @@ StyleSense-AI/
 |       |-- 011/
 |       |-- 012/
 |       |-- ...
-|-- app.py
+|-- streamlit_app.py
 |-- recommendation_model.py
 |-- requirements.txt
 |-- .gitignore

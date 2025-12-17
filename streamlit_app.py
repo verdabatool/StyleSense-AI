@@ -18,8 +18,8 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🛒 Multimodal Product Search")
-st.caption("Text • Image • Product similarity powered by CLIP + FAISS")
+st.title("🛒 StyleSense AI")
+st.caption("Where Fashion meets Innovation")
 
 # --------------------------------------------------
 # Load retriever & data (cached)
@@ -205,10 +205,3 @@ elif mode == "Image upload":
 
             render_copurchase_grid(out["ids"][0])
 
-# --------------------------------------------------
-# Footer
-# --------------------------------------------------
-st.divider()
-st.caption(
-    "CLIP embeddings • FAISS cosine similarity • Offline co-purchase graph"
-)
